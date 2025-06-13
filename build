@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+
+go build -o opencode-client cmd/client/main.go
+go build -o opencode-server cmd/server/main.go

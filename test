@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-
-go build -o long_running_program cmd/example/main.go
-mkfifo input_pipe output_pipe
-./long_running_program < input_pipe > output_pipe &
-echo "long_running_program started: PID=$!"
