@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"time"
@@ -15,15 +14,18 @@ func write_output() {
 }
 
 func read_input() {
-	scanner := bufio.NewScanner(os.Stdin)
+	data := make([]byte, 1024)
 	for {
-		if !scanner.Scan() {
-			break
+		n, err := os.Stdin.Read(data)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading stdin: %v\n", err)
+			return
 		}
-		fmt.Println(scanner.Text())
+		if n == 0 {
+			continue
+		}
+		fmt.Printf("Key pressed: %c (ASCII: %d)\n", data[0], data[0])
 	}
-
-	fmt.Println("STDIN closed")
 }
 
 func main() {
