@@ -10,7 +10,6 @@ import (
 )
 
 func readInput(conn net.Conn) {
-	// Store the original terminal state to restore later
     oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
     if err != nil {
         slog.Error("failed to make raw terminal", "error", err)
@@ -18,13 +17,9 @@ func readInput(conn net.Conn) {
     }
     defer term.Restore(int(os.Stdin.Fd()), oldState) // Restore terminal state on exit
 
-    slog.Info("starting to read input")
-
-    // Buffer to read one byte at a time
     b := make([]byte, 1)
 
     for {
-        // Read a single byte from stdin
         n, err := os.Stdin.Read(b)
         if err != nil {
             slog.Error("failed to read from stdin", "error", err)
@@ -34,13 +29,17 @@ func readInput(conn net.Conn) {
             continue
         }
 
-        // Get the character
 		conn.Write(b[:n])
 
 		char := b[0]
-		if char == 3 { // ASCII for Ctrl+C
+		if char == 3 {
 			slog.Info("ctrl+c detected, exiting...")
-			break
+			os.Exit(0)
+		}
+
+		if char == 4 {
+			slog.Info("ctrl+d detected, exiting...")
+			os.Exit(0)
 		}
     }
 }
@@ -49,13 +48,11 @@ func writeOutput(conn net.Conn) {
 	for {
 		buf := make([]byte, 1024)
 		n, err := conn.Read(buf)
-		slog.Info("read from server", "error", err, "message", string(buf[:n]))
 		if err != nil {
 			slog.Error("failed to read from server", "error", err)
-			os.Exit(1)
+			os.Exit(0)
 		}
-		log := string(buf[:n])
-		slog.Info("received from server", "message", log)
+		os.Stdout.Write(buf[:n])
 	}
 }
 
