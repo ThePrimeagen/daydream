@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
 
 	"daydream.theprimeagen.com/pkg/config"
@@ -94,11 +97,15 @@ type CLIInterface struct {
 	stderr io.ReadCloser
 	out    []io.ReadWriter
 	cmdStr string
+	debug *os.File
 }
+
+var debugID = 0
 
 func NewCLIInterface(cmdStr string, args []string) (*CLIInterface, error) {
 	cmd := exec.Command(cmdStr, args...)
 	stdin, err := cmd.StdinPipe()
+
 	if err != nil {
 		return nil, err
 	}
@@ -117,13 +124,26 @@ func NewCLIInterface(cmdStr string, args []string) (*CLIInterface, error) {
 		return nil, err
 	}
 
-	return &CLIInterface{
+	inter := &CLIInterface{
 		stdout: stdout,
 		stderr: stderr,
 		stdin:  stdin,
 		out:    []io.ReadWriter{},
 		cmdStr: cmdStr,
-	}, nil
+	}
+
+	if config.CLIConfigInstance.Debug {
+		debugID++
+		path := fmt.Sprintf("/tmp/opencode-debug-%d.log", debugID)
+
+		inter.debug, err = os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			slog.Error("failed to open debug log", "error", err)
+			return nil, err
+		}
+	}
+
+	return inter, nil
 }
 
 func (c *CLIInterface) Start() error {
@@ -141,6 +161,10 @@ func (c *CLIInterface) Start() error {
 			copy(out, data[:msg])
 			for _, conn := range c.out {
 				conn.Write(out)
+			}
+
+			if c.debug != nil {
+				c.debug.Write(data[:msg])
 			}
 		}
 	}()
@@ -165,10 +189,25 @@ func (c *CLIInterface) AddConnection(conn net.Conn) {
 
 func CreateNewOpenCodeSession() (*CLIInterface, error) {
 	slog.Info("creating new open code session")
-	return NewCLIInterface("/home/theprimeagen/personal/daydream/long_running_process", []string{})
+	return NewCLIInterface("opencode", []string{})
 }
 
 func main() {
+	var debug bool
+	flag.BoolVar(&debug, "debug", false, "enable debug logging")
+	flag.Parse()
+
+	config.CLIConfigInstance.Debug = debug
+
+	// listen for SIGINT
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt)
+	go func() {
+		<-sigs
+		slog.Info("received SIGINT, exiting...")
+		os.Exit(0)
+	}()
+
 	_ = os.Remove(config.SERVER_SOCKET)
 	server := NewCLIServer()
 	if err := server.Start(context.Background()); err != nil {
