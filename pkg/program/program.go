@@ -14,6 +14,18 @@ import (
 	"golang.org/x/term"
 )
 
+type FnWriter struct {
+	w func(b []byte) (int, error)
+}
+
+func (f *FnWriter) Write(b []byte) (int, error) {
+	return f.w(b)
+}
+
+func FnToWriter(w func(b []byte) (int, error)) io.Writer {
+	return &FnWriter{w: w}
+}
+
 type Program struct {
 	*os.File
 	cmd    *exec.Cmd
@@ -43,10 +55,14 @@ func NewProgram(path string) *Program {
 }
 
 func (a *Program) SendKey(key string) {
-    for _, k := range key {
-        a.Write([]byte{byte(k)})
-        <-time.After(time.Millisecond * 40)
-    }
+	for _, k := range key {
+		a.Write([]byte{byte(k)})
+		<-time.After(time.Millisecond * 40)
+	}
+}
+
+func (a *Program) SendBytes(bytes []byte) {
+	a.Write(bytes)
 }
 
 func (a *Program) WithArgs(args []string) *Program {
@@ -64,27 +80,27 @@ func (a *Program) WithWriter(writer io.Writer) *Program {
 }
 
 func setRawMode(f *os.File) error {
-    fd := int(f.Fd())
-    const ioctlReadTermios = unix.TCGETS  // Linux
-    const ioctlWriteTermios = unix.TCSETS // Linux
+	fd := int(f.Fd())
+	const ioctlReadTermios = unix.TCGETS  // Linux
+	const ioctlWriteTermios = unix.TCSETS // Linux
 
-    termios, err := unix.IoctlGetTermios(fd, ioctlReadTermios)
-    if err != nil {
-        return err
-    }
+	termios, err := unix.IoctlGetTermios(fd, ioctlReadTermios)
+	if err != nil {
+		return err
+	}
 
-    // Set raw mode but preserve output processing for ANSI colors
-    termios.Iflag &^= unix.IGNBRK | unix.BRKINT | unix.PARMRK | unix.ISTRIP | unix.INLCR | unix.IGNCR | unix.ICRNL | unix.IXON
-    // Keep OPOST enabled to preserve ANSI color processing
-    termios.Lflag &^= unix.ECHO | unix.ECHONL | unix.ICANON | unix.ISIG | unix.IEXTEN
-    termios.Cflag &^= unix.CSIZE | unix.PARENB
-    termios.Cflag |= unix.CS8
+	// Set raw mode (disable ECHO, ICANON, ISIG, and other processing)
+	termios.Iflag &^= unix.IGNBRK | unix.BRKINT | unix.PARMRK | unix.ISTRIP | unix.INLCR | unix.IGNCR | unix.ICRNL | unix.IXON
+	termios.Oflag &^= unix.OPOST
+	termios.Lflag &^= unix.ECHO | unix.ECHONL | unix.ICANON | unix.ISIG | unix.IEXTEN
+	termios.Cflag &^= unix.CSIZE | unix.PARENB
+	termios.Cflag |= unix.CS8
 
-    // Set VMIN and VTIME for non-blocking reads
-    termios.Cc[unix.VMIN] = 1
-    termios.Cc[unix.VTIME] = 0
+	// Set VMIN and VTIME for non-blocking reads
+	termios.Cc[unix.VMIN] = 1
+	termios.Cc[unix.VTIME] = 0
 
-    return unix.IoctlSetTermios(fd, ioctlWriteTermios, termios)
+	return unix.IoctlSetTermios(fd, ioctlWriteTermios, termios)
 }
 
 func EchoOff(f *os.File) {
@@ -114,20 +130,14 @@ func (a *Program) Run(ctx context.Context) error {
 
 	cmd := exec.Command(a.path, a.args...)
 
-	// Set proper terminal environment for color support
-	cmd.Env = append(os.Environ(),
-		"TERM=xterm-256color",
-		"COLORTERM=truecolor",
-	)
-
 	a.cmd = cmd
 
 	ptmx, err := pty.Start(cmd)
 
 	err = pty.Setsize(ptmx, &pty.Winsize{
-        Rows: uint16(a.rows),
-        Cols: uint16(a.cols),
-    })
+		Rows: uint16(a.rows),
+		Cols: uint16(a.cols),
+	})
 
 	if err != nil {
 		return err
@@ -144,10 +154,25 @@ func (a *Program) Run(ctx context.Context) error {
 	return err
 }
 
+func (p *Program) PassThroughInput(reader io.Reader) {
+    b := make([]byte, 3)
+
+    for {
+        n, err := reader.Read(b)
+        if err != nil {
+            slog.Error("failed to read from stdin", "error", err)
+            return
+        }
+        if n == 0 {
+            continue
+        }
+
+		p.SendBytes(b[:n])
+    }
+}
+
 func (a *Program) Close() error {
 	err := a.File.Close()
 	a.File = nil
 	return err
 }
-
-

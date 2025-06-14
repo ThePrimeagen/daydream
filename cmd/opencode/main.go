@@ -2,85 +2,66 @@ package main
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"daydream.theprimeagen.com/pkg/program"
 	"golang.org/x/term"
 )
 
-type FnWriter struct {
-	w func(b []byte) (int, error)
-}
-
-func (f *FnWriter) Write(b []byte) (int, error) {
-	return f.w(b)
-}
-
-func asWriter(w func(b []byte) (int, error)) io.Writer {
-	return &FnWriter{w: w}
-}
-
-func handleInput(prg *program.Program) {
-    oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
-    if err != nil {
-        slog.Error("failed to make raw terminal", "error", err)
-        return
-    }
-    defer term.Restore(int(os.Stdin.Fd()), oldState) // Restore terminal state on exit
-
-    b := make([]byte, 1)
-
-//	program.EchoOff(os.Stdin)
-
-    for {
-        n, err := os.Stdin.Read(b)
-        if err != nil {
-            slog.Error("failed to read from stdin", "error", err)
-            return
-        }
-        if n == 0 {
-            continue
-        }
-
-		prg.SendKey(string(b[:n]))
-		char := b[0]
-		if char == 3 {
-			slog.Info("ctrl+c detected, exiting...")
-			os.Exit(0)
-		}
-
-		if char == 4 {
-			slog.Info("ctrl+d detected, exiting...")
-			os.Exit(0)
-		}
-    }
-}
-
 func main() {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	debug, err := os.Create("/tmp/test.log")
 	if err != nil {
 		slog.Error("failed to create debug log", "error", err)
 		os.Exit(1)
 	}
+	defer debug.Close()
 
-	prg := program.NewProgram("opencode").WithWriter(asWriter(func(b []byte) (int, error) {
+	// Set up signal handling for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	prg := program.NewProgram("opencode").WithWriter(program.FnToWriter(func(b []byte) (int, error) {
 		os.Stdout.Write(b)
 		debug.Write(b)
 		return len(b), nil
 	}))
 
+	// Store terminal state for restoration
+	var oldState *term.State
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		oldState, err = term.MakeRaw(int(os.Stdin.Fd()))
+		if err != nil {
+			slog.Error("failed to make raw terminal", "error", err)
+		}
+	}
+
+	// Ensure terminal is restored on exit
+	defer func() {
+		if oldState != nil {
+			term.Restore(int(os.Stdin.Fd()), oldState)
+		}
+	}()
+
 	go func() {
 		err = prg.Run(ctx)
 		if err != nil {
 			slog.Error("failed to run program", "error", err)
-			os.Exit(1)
 		}
-		<-ctx.Done()
+		cancel()
 	}()
 
-	go handleInput(prg)
-	select {}
+	go prg.PassThroughInput(os.Stdin)
+
+	// Wait for signal or context cancellation
+	select {
+	case <-sigChan:
+		cancel()
+	case <-ctx.Done():
+	}
 }
