@@ -1,2 +1,0 @@
-#!/usr/bin/env bash
-bun run /home/theprimeagen/personal/opencode/packages/opencode/src/index.ts
